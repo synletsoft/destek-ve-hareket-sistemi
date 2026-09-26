@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#a9bad0" />
+    <title>Destek ve Hareket Sistemi | 3B Anatomi</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/"}}
+    </script>
+  </head>
+  <body>
+    <main class="app" id="app">
+      <canvas id="scene" aria-label="Destek ve hareket sistemi 3B modeli"></canvas>
+      <div class="scene-vignette" aria-hidden="true"></div>
+      <div class="model-labels" id="modelLabels" aria-hidden="true"></div>
+
+      <header class="header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">✦</span>
+          <div><p class="eyebrow">ETKİLEŞİMLİ BİYOLOJİ</p><h1>Destek ve Hareket Sistemi</h1></div>
+        </div>
+        <div class="header-actions">
+          <button class="asset-action" id="resetButton" type="button" aria-label="Görünümü sıfırla" title="Görünümü sıfırla"><img src="./kaynak/yenilebt.png" alt="" /></button>
+          <button class="asset-action" id="soundButton" type="button" aria-label="Sesi aç" aria-pressed="false" title="Sesi aç"><img src="./kaynak/sesbt.png" alt="" /></button>
+          <button class="asset-action" id="menuButton" type="button" aria-label="Menüyü aç" aria-expanded="false" aria-controls="topMenu" title="Menü"><img src="./kaynak/menubt.png" alt="" /></button>
+          <button class="asset-action" id="shareButton" type="button" aria-label="Uygulamayı paylaş" title="Uygulamayı paylaş"><img src="./kaynak/paylasbt.png" alt="" /></button>
+          <button class="asset-action" id="fullscreenButton" type="button" aria-label="Tam ekran" title="Tam ekran"><img src="./kaynak/tamekranbt.png" alt="" /></button>
+        </div>
+      </header>
+      <div class="top-menu hidden" id="topMenu" aria-label="Uygulama menüsü">
+        <button id="menuStructuresButton" type="button">Yapılar panelini aç / kapat</button>
+        <button id="helpButton" type="button">Nasıl kullanılır?</button>
+      </div>
+
+      <aside class="sidebar" aria-label="Anatomik yapılar">
+        <div class="category-list" id="categoryList" role="tablist" aria-label="Yapı grupları"></div>
+        <div class="structure-list" id="structureList" aria-label="Kemikler yapıları"></div>
+      </aside>
+
+      <div class="view-controls" aria-label="Kamera açıları">
+        <span class="view-caption">GÖRÜNÜM</span>
+        <button data-view="front" type="button">Ön</button>
+        <button data-view="back" type="button">Arka</button>
+        <button data-view="left" type="button">Sol</button>
+        <button data-view="right" type="button">Sağ</button>
+      </div>
+
+      <div class="viewer-actions" aria-label="Model araçları">
+        <button id="rotateButton" type="button" aria-label="Otomatik döndür" aria-pressed="false" title="Otomatik döndür">⟳ <span>Döndür</span></button>
+        <button id="isolateButton" type="button" aria-label="Seçili yapıyı izole et" aria-pressed="false" title="Seçili yapıyı göster">◎ <span>İzole et</span></button>
+        <button id="labelsButton" type="button" aria-label="Etiketleri göster" aria-pressed="false" title="Etiketleri göster">⌖ <span>Etiketler</span></button>
+        <button id="showAllButton" type="button" aria-label="Tüm yapıları göster" title="Tüm yapıları göster">◉ <span>Tümünü göster</span></button>
+      </div>
+
+      <div class="selection-chip" id="selectionChip" aria-live="polite">
+        <span class="chip-dot"></span><span id="selectionText">Bir yapı seçin</span>
+        <button id="openCardButton" type="button">Bilgi kartı ↗</button>
+      </div>
+
+      <aside class="info-panel" id="infoPanel" aria-label="Seçili yapının bilgi kartı">
+        <div class="info-head"><button id="closeCardButton" type="button" aria-label="Bilgi kartını kapat">×</button></div>
+        <div class="card-content" id="cardContent">
+          <div class="card-placeholder"><span>✦</span><p>Bir yapı seçerek kaynak bilgi kartını görüntüleyin.</p></div>
+        </div>
+        <div class="card-controls">
+          <button id="previousButton" type="button" aria-label="Önceki yapı">←</button>
+          <span id="cardPosition">—</span>
+          <button id="nextButton" type="button" aria-label="Sonraki yapı">→</button>
+        </div>
+      </aside>
+
+      <button class="mobile-list-toggle" id="mobileListToggle" type="button" aria-expanded="true" aria-controls="sidebarMobileHint">Yapılar <span>⌄</span></button>
+      <span class="sr-only" id="sidebarMobileHint">Yapılar panelini aç veya kapat</span>
+
+      <div class="loading" id="loading" role="status" aria-live="polite">
+        <div class="loading-symbol">✦</div>
+        <h2>3B anatomi hazırlanıyor</h2>
+        <p id="loadingText">Model yükleniyor…</p>
+        <div class="loading-track"><span id="loadingProgress"></span></div>
+      </div>
+      <div class="error hidden" id="error" role="alert">
+        <h2>Model yüklenemedi</h2>
+        <p>Sayfayı bir yerel sunucu üzerinden açıp tekrar deneyin.</p>
+        <button id="retryButton" type="button">Yeniden dene</button>
+      </div>
+
+      <dialog id="helpDialog">
+        <div class="dialog-head"><h2>Nasıl kullanılır?</h2><button id="helpCloseButton" type="button" aria-label="Yardımı kapat">×</button></div>
+        <ul>
+          <li>Bir kemik, eklem veya bağ seçin; model o yapıya yaklaşır.</li>
+          <li>Fareyle ya da tek parmakla sürükleyerek modeli döndürün.</li>
+          <li>Tekerlek veya iki parmakla yakınlaştırın. Sağ tıkla modeli taşıyın.</li>
+          <li>Ön, arka ve yan kamera açılarına geçin. <kbd>R</kbd> ile sıfırlayın.</li>
+          <li>Modeldeki bir parçaya dokunarak ilgili bilgi kartını açın.</li>
+        </ul>
+        <button class="dialog-done" id="helpDoneButton" type="button">Keşfetmeye başla</button>
+      </dialog>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </main>
+    <script type="module" src="./viewer.js"></script>
+  </body>
+</html>
