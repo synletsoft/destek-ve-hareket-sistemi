@@ -71,6 +71,8 @@ camera.position.set(0, 0, 4);
 const structureObjects = new Map();
 const objectIds = new Map();
 const originalMaterials = new Map();
+const highlightMaterials = new Set();
+const highlightColor = new THREE.Color(0xffe3ab);
 const hiddenIds = new Set();
 let model = null;
 let modelBox = new THREE.Box3();
@@ -85,6 +87,7 @@ let cameraTween = null;
 let dragging = null;
 let toastTimer = null;
 let renderNeeded = true;
+let highlightUntil = 0;
 let soundEnabled = false;
 let audioContext = null;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -307,6 +310,7 @@ function selectItem(id, { open = true } = {}) {
 }
 
 function applyVisibility() {
+  highlightMaterials.clear();
   for (const item of items) {
     for (const mesh of structureObjects.get(item.id) || []) {
       mesh.visible = !hiddenIds.has(item.id) && (!isolated || selectedId === item.id);
@@ -319,13 +323,19 @@ function applyVisibility() {
       if (item.id === selectedId && mesh.visible) {
         const tint = material => {
           const clone = material.clone();
-          if (clone.emissive) { clone.emissive.setHex(0x996039); clone.emissiveIntensity = .25; }
+          if (clone.color) clone.color.lerp(highlightColor, .14);
+          if (clone.emissive) {
+            clone.emissive.setHex(0xb67b37);
+            clone.emissiveIntensity = .3;
+            highlightMaterials.add(clone);
+          }
           return clone;
         };
         mesh.material = Array.isArray(original) ? original.map(tint) : tint(original);
       }
     }
   }
+  highlightUntil = selectedId && highlightMaterials.size && !reduceMotion.matches ? performance.now() + 2400 : 0;
   updateLabels();
   renderNeeded = true;
 }
@@ -450,6 +460,15 @@ function resize() {
 
 function animate(now) {
   requestAnimationFrame(animate);
+  if (highlightUntil && now < highlightUntil) {
+    const glow = .29 + .11 * Math.sin(now * .009);
+    highlightMaterials.forEach(material => { material.emissiveIntensity = glow; });
+    renderNeeded = true;
+  } else if (highlightUntil) {
+    highlightMaterials.forEach(material => { material.emissiveIntensity = .3; });
+    highlightUntil = 0;
+    renderNeeded = true;
+  }
   if (cameraTween) {
     const t = Math.min(1, (now - cameraTween.start) / cameraTween.duration);
     const smooth = t * t * (3 - 2 * t);
