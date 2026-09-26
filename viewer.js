@@ -241,19 +241,13 @@ function loadModel() {
   });
 }
 
-function mobileOffset(distance, selected = false) {
-  if (!matchMedia("(max-width: 760px) and (orientation: portrait)").matches) return 0;
-  const homeShift = -.09 - Math.max(0, 700 - app.clientHeight) / 4400;
-  return distance * (selected ? -.14 : homeShift);
-}
-
-function cameraDistance(box, padding = 1.35) {
+function cameraDistance(box, padding = 1.35, minimumModelScale = .16) {
   const size = box.getSize(new THREE.Vector3());
   const height = Math.max(size.y, modelSize.y * .13);
   const width = Math.max(size.x, modelSize.x * .13);
   const vertical = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
   const horizontal = width / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
-  return Math.max(vertical, horizontal, modelSize.length() * .16) * padding;
+  return Math.max(vertical, horizontal, modelSize.length() * minimumModelScale) * padding;
 }
 
 function moveCamera(target, direction, distance, immediate = false) {
@@ -276,10 +270,9 @@ function moveCamera(target, direction, distance, immediate = false) {
 function goHome(immediate = false) {
   if (!model) return;
   const portrait = matchMedia("(max-width: 760px) and (orientation: portrait)").matches;
-  const portraitPadding = Math.max(2.05, 1620 / app.clientHeight);
+  const portraitPadding = 1.5;
   const distance = cameraDistance(modelBox, portrait ? portraitPadding : 1.48);
   const target = center.clone();
-  target.y += mobileOffset(distance);
   moveCamera(target, directions[currentView], distance, immediate);
 }
 
@@ -289,9 +282,9 @@ function focusSelected(immediate = false) {
   if (!objects.length) return;
   const box = new THREE.Box3();
   objects.forEach(object => box.expandByObject(object));
-  const distance = cameraDistance(box, selectedId === "joints" || selectedId === "ligaments" ? 1.75 : 3.8);
+  const bone = byId.get(selectedId).category === "bones";
+  const distance = cameraDistance(box, bone ? 3.3 : 1.75, bone ? .08 : .16);
   const target = box.getCenter(new THREE.Vector3());
-  target.y += mobileOffset(distance, true);
   const view = byId.get(selectedId).view || currentView;
   currentView = view;
   updateViewButtons();
@@ -372,9 +365,9 @@ function setView(view) {
     const objects = structureObjects.get(selectedId) || [];
     const box = new THREE.Box3();
     objects.forEach(object => box.expandByObject(object));
-    const distance = cameraDistance(box, selectedId === "joints" || selectedId === "ligaments" ? 1.75 : 3.8);
+    const bone = byId.get(selectedId).category === "bones";
+    const distance = cameraDistance(box, bone ? 3.3 : 1.75, bone ? .08 : .16);
     const target = box.getCenter(new THREE.Vector3());
-    target.y += mobileOffset(distance, true);
     moveCamera(target, directions[view], distance);
   } else goHome();
 }
@@ -398,6 +391,7 @@ function updateLabels() {
 function positionLabels() {
   if (!labelsShown || !model) return;
   const rect = canvas.getBoundingClientRect();
+  const appRect = app.getBoundingClientRect();
   for (const label of $("#modelLabels").children) {
     const objects = structureObjects.get(label.dataset.id) || [];
     const box = new THREE.Box3();
@@ -405,8 +399,8 @@ function positionLabels() {
     if (box.isEmpty()) continue;
     const point = box.getCenter(new THREE.Vector3()).project(camera);
     label.style.display = point.z < -1 || point.z > 1 ? "none" : "block";
-    label.style.left = `${(point.x * .5 + .5) * rect.width}px`;
-    label.style.top = `${(-point.y * .5 + .5) * rect.height}px`;
+    label.style.left = `${rect.left - appRect.left + (point.x * .5 + .5) * rect.width}px`;
+    label.style.top = `${rect.top - appRect.top + (-point.y * .5 + .5) * rect.height}px`;
   }
 }
 
@@ -446,7 +440,7 @@ function setMenu(open) {
 }
 
 function resize() {
-  const width = app.clientWidth, height = app.clientHeight;
+  const width = Math.max(1, canvas.clientWidth), height = Math.max(1, canvas.clientHeight);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, width < 760 ? 1.5 : 2));
@@ -538,6 +532,7 @@ document.addEventListener("keydown", event => {
   if (key === "arrowleft" && selectedId && byId.get(selectedId).category === "bones") $("#previousButton").click();
 });
 window.addEventListener("resize", () => { resize(); if (model) selectedId ? focusSelected(true) : goHome(true); });
+new ResizeObserver(() => { resize(); if (model) selectedId ? focusSelected(true) : goHome(true); }).observe(canvas);
 controls.addEventListener("change", () => { renderNeeded = true; });
 app.addEventListener("click", playClick);
 
