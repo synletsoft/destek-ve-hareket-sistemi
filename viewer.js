@@ -26,8 +26,8 @@ const bones = [
   bone("foot", "Ayak kemikleri", "Ayak_Kemikleri", "Ayak Kemikleri"),
 ];
 const special = [
-  { id: "joints", label: "Eklemler", node: "Eklemler", category: "joints", description: "Eklemler, kemiklerin birleştiği bölgelerdir. Hareketin yönünü ve genişliğini belirler. Modelde mavi eklem katmanını seçip döndürerek farklı açılardan inceleyin." },
-  { id: "ligaments", label: "Eklem bağları", node: "Eklem_Bağları", category: "ligaments", description: "Eklem bağları, kemikleri eklem çevresinde birbirine bağlayan güçlü doku bantlarıdır. Eklemleri destekler ve hareketin sınırlarını korumaya yardımcı olur." },
+  { id: "joints", label: "Eklemler", node: "Eklemler", category: "joints", card: `${ASSET}kartlar/Eklemler.png` },
+  { id: "ligaments", label: "Eklem bağları", node: "Eklem_Bağları", category: "ligaments", card: `${ASSET}kartlar/Eklem Bağı.png` },
 ];
 const items = [...bones, ...special];
 const byId = new Map(items.map(item => [item.id, item]));
@@ -50,13 +50,13 @@ const camera = new THREE.PerspectiveCamera(42, 1, 0.005, 100);
 const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "high-performance" });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.3;
+renderer.toneMappingExposure = 1.08;
 renderer.setClearColor(0, 0);
-scene.add(new THREE.HemisphereLight(0xf5f9ff, 0x736556, 2.1));
-const keyLight = new THREE.DirectionalLight(0xffffff, 2.15);
+scene.add(new THREE.HemisphereLight(0xf5f9ff, 0x736556, 1.7));
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.05);
 keyLight.position.set(3, 5, 5);
 scene.add(keyLight);
-const fillLight = new THREE.DirectionalLight(0xc3d9f9, 1.1);
+const fillLight = new THREE.DirectionalLight(0xc3d9f9, .7);
 fillLight.position.set(-5, 2, -4);
 scene.add(fillLight);
 const controls = new OrbitControls(camera, canvas);
@@ -73,18 +73,19 @@ const objectIds = new Map();
 const originalMaterials = new Map();
 const highlightMaterials = new Set();
 const highlightColor = new THREE.Color(0xffe3ab);
-const hiddenIds = new Set();
+// Bone anatomy is the permanent base; the other two layers are independent switches.
+const visibleLayers = new Set(["bones"]);
+const compactDevice = matchMedia("(max-width: 900px), (pointer: coarse)");
 let model = null;
 let modelBox = new THREE.Box3();
 let modelSize = new THREE.Vector3(1, 2, 1);
 let center = new THREE.Vector3();
 let selectedId = null;
-let categoryId = "bones";
-let isolated = false;
 let labelsShown = false;
 let currentView = "front";
 let cameraTween = null;
 let dragging = null;
+const activePointers = new Set();
 let toastTimer = null;
 let renderNeeded = true;
 let highlightUntil = 0;
@@ -94,121 +95,106 @@ const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
 function renderCategories() {
   const container = $("#categoryList");
-  container.replaceChildren();
   for (const category of categories) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `category-button${category.id === categoryId ? " active" : ""}`;
-    button.setAttribute("role", "tab");
-    button.setAttribute("aria-selected", String(category.id === categoryId));
+    let button = container.querySelector(`[data-layer="${category.id}"]`);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.dataset.layer = category.id;
+      const image = document.createElement("img");
+      image.className = "category-art";
+      image.alt = "";
+      image.draggable = false;
+      button.append(image);
+      button.addEventListener("click", () => toggleLayer(category.id));
+      container.append(button);
+    }
+    const visible = visibleLayers.has(category.id);
+    button.className = `category-button${visible ? " active" : ""}`;
+    button.setAttribute("aria-pressed", String(visible));
     button.setAttribute("aria-label", category.label);
-    button.innerHTML = `<img class="category-art" alt="" src="${ASSET}${category.id === categoryId ? category.activeImage : category.image}">`;
-    button.addEventListener("click", () => setCategory(category.id));
-    container.append(button);
+    const showingCard = selectedId === category.id && !$("#infoPanel").classList.contains("closed");
+    button.title = category.id === "bones" ? "Kemikler her zaman görünür · Tüm iskelete dön" : `${category.label}: ${visible && showingCard ? "gizle" : visible ? "bilgi kartını aç" : "göster"}`;
+    button.querySelector("img").src = `${ASSET}${visible ? category.activeImage : category.image}`;
   }
 }
 
-function renderStructureList() {
-  const list = $("#structureList");
-  list.replaceChildren();
-  const visibleItems = categoryId === "bones" ? bones : special.filter(item => item.category === categoryId);
-  list.setAttribute("aria-label", `${categories.find(category => category.id === categoryId).label} yapıları`);
-  for (const item of visibleItems) {
-    const row = document.createElement("div");
-    row.className = `structure-row${selectedId === item.id ? " active" : ""}`;
-    const select = document.createElement("button");
-    select.type = "button";
-    select.className = "structure-select";
-    select.textContent = item.label;
-    select.setAttribute("aria-label", `${item.label} yapısına odaklan`);
-    select.addEventListener("click", () => selectItem(item.id));
-    const visibility = document.createElement("button");
-    visibility.type = "button";
-    visibility.className = "visibility-button";
-    visibility.textContent = "◉";
-    visibility.title = `${item.label} göster veya gizle`;
-    visibility.setAttribute("aria-label", visibility.title);
-    visibility.setAttribute("aria-pressed", String(!hiddenIds.has(item.id)));
-    visibility.addEventListener("click", () => toggleVisibility(item.id));
-    row.append(select, visibility);
-    list.append(row);
-  }
-}
-
-function setCategory(id) {
-  categoryId = id;
-  renderCategories();
+function toggleLayer(id) {
   if (id === "bones") {
     selectedId = null;
-    isolated = false;
     applyVisibility();
     updateCard();
-    updateSelectionUi();
     closeCard();
     goHome();
-  } else {
-    selectItem(id);
+    return;
   }
-  renderStructureList();
-}
-
-function updateSelectionUi() {
-  const item = byId.get(selectedId);
-  $("#selectionText").textContent = item ? item.label : "Bir yapı seçin";
-  $("#openCardButton").disabled = !item;
-  $("#isolateButton").setAttribute("aria-pressed", String(isolated));
-  $("#isolateButton").disabled = !item;
-  renderStructureList();
+  if (visibleLayers.has(id)) {
+    if (selectedId !== id || $("#infoPanel").classList.contains("closed")) {
+      selectItem(id, { focus: false });
+      return;
+    }
+    visibleLayers.delete(id);
+    if (selectedId === id) {
+      selectedId = null;
+      updateCard();
+      closeCard();
+    }
+    renderCategories();
+    applyVisibility();
+  } else {
+    visibleLayers.add(id);
+    // Keep the camera still so the change can be compared on the same joint.
+    selectItem(id, { focus: false });
+  }
 }
 
 function updateCard() {
   const content = $("#cardContent");
-  content.replaceChildren();
   const item = byId.get(selectedId);
-  if (!item) {
-    content.innerHTML = `<div class="card-placeholder"><span>✦</span><p>Bir yapı seçerek kaynak bilgi kartını görüntüleyin.</p></div>`;
-    $("#cardPosition").textContent = "—";
-  } else if (item.card) {
-    const image = document.createElement("img");
-    image.alt = `${item.label} bilgi kartı`;
-    image.src = item.card;
-    image.addEventListener("error", () => {
-      content.innerHTML = `<div class="card-placeholder"><span>✦</span><p>${item.label} kart görseli yüklenemedi.</p></div>`;
-    }, { once: true });
-    content.append(image);
-    $("#cardPosition").textContent = `${bones.indexOf(item) + 1} / ${bones.length}`;
-  } else {
-    const summary = document.createElement("div");
-    summary.className = "category-summary";
-    const img = document.createElement("img");
-    img.src = `${ASSET}${categories.find(category => category.id === item.category).image}`;
-    img.alt = "";
-    const title = document.createElement("h3");
-    title.textContent = item.label;
-    const description = document.createElement("p");
-    description.textContent = item.description;
-    summary.append(img, title, description);
-    content.append(summary);
-    $("#cardPosition").textContent = "Katman";
-  }
-  $("#previousButton").disabled = !item || item.category !== "bones";
-  $("#nextButton").disabled = !item || item.category !== "bones";
+  content.replaceChildren();
+  $("#cardControls").hidden = !item || item.category !== "bones";
+  $("#infoPanel").setAttribute("aria-label", item ? `${item.label} bilgi kartı` : "Bilgi kartı");
+  if (!item) return;
+  const image = document.createElement("img");
+  image.alt = `${item.label} bilgi kartı`;
+  image.src = item.card;
+  image.draggable = false;
+  image.addEventListener("error", () => {
+    const message = document.createElement("p");
+    message.className = "card-placeholder";
+    message.textContent = `${item.label} kart görseli yüklenemedi.`;
+    content.replaceChildren(message);
+  }, { once: true });
+  content.append(image);
+  content.scrollTop = 0;
+  $("#cardPosition").textContent = item.category === "bones" ? `${bones.indexOf(item) + 1} / ${bones.length}` : "";
 }
 
-function openCard() { $("#infoPanel").classList.remove("closed", "mobile-hidden"); app.classList.add("card-open"); }
-function closeCard() { $("#infoPanel").classList.add("closed", "mobile-hidden"); app.classList.remove("card-open"); }
+function openCard() { $("#infoPanel").classList.remove("closed"); app.classList.add("card-open"); renderCategories(); resize(); }
+function closeCard() { $("#infoPanel").classList.add("closed"); app.classList.remove("card-open"); renderCategories(); resize(); }
 
 function loadModel() {
   const loader = new GLTFLoader();
   $("#loading").classList.remove("hidden");
   $("#error").classList.add("hidden");
-  loader.load("./destek-web.glb", gltf => {
+  const modelUrl = compactDevice.matches ? "./destek-web.glb" : "./destek-detail.glb";
+  loader.load(modelUrl, gltf => {
     model = gltf.scene;
     scene.add(model);
     model.updateWorldMatrix(true, true);
     modelBox.setFromObject(model);
     modelBox.getCenter(center);
     modelBox.getSize(modelSize);
+    const anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), compactDevice.matches ? 4 : 8);
+    model.traverse(object => {
+      if (!object.isMesh) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        for (const map of [material.map, material.normalMap, material.roughnessMap]) {
+          if (map) map.anisotropy = anisotropy;
+        }
+      }
+    });
     for (const item of items) {
       const node = model.getObjectByName(item.node);
       if (!node) console.warn(`Model node missing: ${item.node}`);
@@ -244,13 +230,15 @@ function loadModel() {
   });
 }
 
-function cameraDistance(box, padding = 1.35, minimumModelScale = .16) {
+function cameraDistance(box, padding = 1.2, minimumModelScale = .12, view = currentView) {
   const size = box.getSize(new THREE.Vector3());
-  const height = Math.max(size.y, modelSize.y * .13);
-  const width = Math.max(size.x, modelSize.x * .13);
+  const direction = directions[view];
+  const height = Math.max(size.y, modelSize.y * .1);
+  const width = Math.max(Math.abs(direction.x) * size.z + Math.abs(direction.z) * size.x, modelSize.y * .05);
+  const depth = Math.abs(direction.x) * size.x + Math.abs(direction.z) * size.z;
   const vertical = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
   const horizontal = width / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
-  return Math.max(vertical, horizontal, modelSize.length() * minimumModelScale) * padding;
+  return Math.max(vertical, horizontal, modelSize.length() * minimumModelScale) * padding + depth * .5;
 }
 
 function moveCamera(target, direction, distance, immediate = false) {
@@ -272,55 +260,50 @@ function moveCamera(target, direction, distance, immediate = false) {
 
 function goHome(immediate = false) {
   if (!model) return;
-  const portrait = matchMedia("(max-width: 760px) and (orientation: portrait)").matches;
-  const portraitPadding = 1.5;
-  const distance = cameraDistance(modelBox, portrait ? portraitPadding : 1.48);
+  const distance = cameraDistance(modelBox, 1.12);
   const target = center.clone();
   moveCamera(target, directions[currentView], distance, immediate);
 }
 
-function focusSelected(immediate = false) {
+function focusSelected(immediate = false, usePreferredView = false) {
   if (!model || !selectedId) return;
+  if (byId.get(selectedId).category !== "bones") { goHome(immediate); return; }
   const objects = structureObjects.get(selectedId) || [];
   if (!objects.length) return;
   const box = new THREE.Box3();
   objects.forEach(object => box.expandByObject(object));
   const bone = byId.get(selectedId).category === "bones";
-  const distance = cameraDistance(box, bone ? 3.3 : 1.75, bone ? .08 : .16);
+  const view = usePreferredView ? byId.get(selectedId).view || currentView : currentView;
+  const distance = cameraDistance(box, bone ? 2.6 : 1.12, bone ? .08 : .12, view);
   const target = box.getCenter(new THREE.Vector3());
-  const view = byId.get(selectedId).view || currentView;
   currentView = view;
   updateViewButtons();
   moveCamera(target, directions[view], distance, immediate);
 }
 
-function selectItem(id, { open = true } = {}) {
+function selectItem(id, { open = true, focus = true } = {}) {
   if (!byId.has(id)) return;
   selectedId = id;
-  categoryId = byId.get(id).category;
-  hiddenIds.delete(id);
-  isolated = false;
+  visibleLayers.add(byId.get(id).category);
   renderCategories();
   applyVisibility();
-  updateSelectionUi();
   updateCard();
   if (open) openCard();
-  focusSelected();
-  announce(`${byId.get(id).label} seçildi`);
+  if (focus) focusSelected(false, true);
 }
 
 function applyVisibility() {
   highlightMaterials.clear();
   for (const item of items) {
     for (const mesh of structureObjects.get(item.id) || []) {
-      mesh.visible = !hiddenIds.has(item.id) && (!isolated || selectedId === item.id);
+      mesh.visible = visibleLayers.has(item.category);
       const original = originalMaterials.get(mesh);
       if (mesh.material !== original) {
         const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         materials.forEach(material => material.dispose());
         mesh.material = original;
       }
-      if (item.id === selectedId && mesh.visible) {
+      if (item.id === selectedId && item.category === "bones" && mesh.visible) {
         const tint = material => {
           const clone = material.clone();
           if (clone.color) clone.color.lerp(highlightColor, .14);
@@ -340,55 +323,60 @@ function applyVisibility() {
   renderNeeded = true;
 }
 
-function toggleVisibility(id) {
-  if (hiddenIds.has(id)) hiddenIds.delete(id); else hiddenIds.add(id);
-  if (id === selectedId && hiddenIds.has(id)) { selectedId = null; isolated = false; updateCard(); }
-  applyVisibility();
-  updateSelectionUi();
-}
-
 function showAll() {
-  hiddenIds.clear();
-  isolated = false;
+  categories.forEach(category => visibleLayers.add(category.id));
+  renderCategories();
   applyVisibility();
-  updateSelectionUi();
-  announce("Tüm yapılar gösteriliyor");
+  announce("Tüm katmanlar gösteriliyor");
 }
 
-function toggleIsolation() {
-  if (!selectedId) return;
-  isolated = !isolated;
+function resetViewer() {
+  selectedId = null;
+  visibleLayers.clear();
+  visibleLayers.add("bones");
+  currentView = "front";
+  labelsShown = false;
+  controls.autoRotate = false;
+  $("#rotateButton").setAttribute("aria-pressed", "false");
+  $("#labelsButton").setAttribute("aria-pressed", "false");
+  renderCategories();
+  updateViewButtons();
   applyVisibility();
-  updateSelectionUi();
-  announce(isolated ? "Seçili yapı izole edildi" : "Tüm yapılar gösteriliyor");
+  updateCard();
+  closeCard();
+  setViewMenu(false);
+  goHome();
+}
+
+function setViewMenu(open) {
+  $("#viewControls").classList.toggle("hidden", !open);
+  $("#viewButton").setAttribute("aria-expanded", String(open));
+  $("#viewButton").setAttribute("aria-label", open ? "Kamera açılarını kapat" : "Kamera açılarını aç");
 }
 
 function updateViewButtons() {
-  document.querySelectorAll("[data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === currentView));
+  document.querySelectorAll("[data-view]").forEach(button => {
+    button.classList.toggle("active", button.dataset.view === currentView);
+    button.setAttribute("aria-pressed", String(button.dataset.view === currentView));
+  });
 }
 
 function setView(view) {
   currentView = view;
   updateViewButtons();
+  setViewMenu(false);
   if (!model) return;
-  if (selectedId) {
-    const objects = structureObjects.get(selectedId) || [];
-    const box = new THREE.Box3();
-    objects.forEach(object => box.expandByObject(object));
-    const bone = byId.get(selectedId).category === "bones";
-    const distance = cameraDistance(box, bone ? 3.3 : 1.75, bone ? .08 : .16);
-    const target = box.getCenter(new THREE.Vector3());
-    moveCamera(target, directions[view], distance);
-  } else goHome();
+  if (selectedId && byId.get(selectedId).category === "bones") focusSelected();
+  else goHome();
 }
 
 function updateLabels() {
   const layer = $("#modelLabels");
   layer.replaceChildren();
   if (!labelsShown || !model) return;
-  const source = selectedId ? [byId.get(selectedId)] : categoryId === "bones" ? bones : special.filter(item => item.category === categoryId);
+  const source = selectedId ? [byId.get(selectedId)] : items;
   for (const item of source) {
-    if (hiddenIds.has(item.id) || (isolated && selectedId !== item.id)) continue;
+    if (!visibleLayers.has(item.category)) continue;
     const label = document.createElement("span");
     label.className = "model-label";
     label.textContent = item.label;
@@ -408,9 +396,13 @@ function positionLabels() {
     objects.forEach(object => box.expandByObject(object));
     if (box.isEmpty()) continue;
     const point = box.getCenter(new THREE.Vector3()).project(camera);
-    label.style.display = point.z < -1 || point.z > 1 ? "none" : "block";
-    label.style.left = `${rect.left - appRect.left + (point.x * .5 + .5) * rect.width}px`;
-    label.style.top = `${rect.top - appRect.top + (-point.y * .5 + .5) * rect.height}px`;
+    const visible = point.z >= -1 && point.z <= 1 && Math.abs(point.x) < 1 && Math.abs(point.y) < 1;
+    label.style.display = visible ? "block" : "none";
+    if (!visible) continue;
+    const x = THREE.MathUtils.clamp((point.x * .5 + .5) * rect.width, label.offsetWidth / 2 + 2, rect.width - label.offsetWidth / 2 - 2);
+    const y = THREE.MathUtils.clamp((-point.y * .5 + .5) * rect.height, label.offsetHeight / 2 + 2, rect.height - label.offsetHeight / 2 - 2);
+    label.style.left = `${rect.left - appRect.left + x}px`;
+    label.style.top = `${rect.top - appRect.top + y}px`;
   }
 }
 
@@ -453,7 +445,7 @@ function resize() {
   const width = Math.max(1, canvas.clientWidth), height = Math.max(1, canvas.clientHeight);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, width < 760 ? 1.5 : 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, compactDevice.matches ? 1.5 : 2));
   renderer.setSize(width, height, false);
   renderNeeded = true;
 }
@@ -487,29 +479,35 @@ function animate(now) {
   }
 }
 
-canvas.addEventListener("pointerdown", event => { dragging = { x: event.clientX, y: event.clientY }; cameraTween = null; });
+canvas.addEventListener("pointerdown", event => {
+  activePointers.add(event.pointerId);
+  dragging = activePointers.size === 1 ? { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false } : null;
+  cameraTween = null;
+});
+canvas.addEventListener("pointermove", event => {
+  if (dragging && Math.hypot(event.clientX - dragging.x, event.clientY - dragging.y) > 7) dragging.moved = true;
+});
+canvas.addEventListener("pointercancel", event => { activePointers.delete(event.pointerId); dragging = null; });
 canvas.addEventListener("pointerup", event => {
-  if (!dragging || Math.hypot(event.clientX - dragging.x, event.clientY - dragging.y) > 7 || !model) { dragging = null; return; }
+  activePointers.delete(event.pointerId);
+  if (!dragging || dragging.id !== event.pointerId || dragging.moved || Math.hypot(event.clientX - dragging.x, event.clientY - dragging.y) > 7 || !model) { dragging = null; return; }
   dragging = null;
   const rect = canvas.getBoundingClientRect();
   const mouse = new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
   const ray = new THREE.Raycaster();
   ray.setFromCamera(mouse, camera);
   const hits = ray.intersectObject(model, true).filter(result => result.object.visible && objectIds.has(result.object));
-  const hit = hits.find(result => byId.get(objectIds.get(result.object)).category === categoryId) || hits[0];
+  const hit = hits[0];
   if (hit) selectItem(objectIds.get(hit.object));
 });
 
 $("#helpButton").addEventListener("click", () => $("#helpDialog").showModal());
 $("#menuButton").addEventListener("click", () => setMenu($("#topMenu").classList.contains("hidden")));
-$("#menuStructuresButton").addEventListener("click", () => {
-  if (matchMedia("(max-width: 760px), (max-height: 500px)").matches) $("#mobileListToggle").click();
-  else app.classList.toggle("sidebar-hidden");
-  setMenu(false);
-});
+$("#menuHomeButton").addEventListener("click", () => { resetViewer(); setMenu(false); });
 $("#helpButton").addEventListener("click", () => setMenu(false));
 document.addEventListener("pointerdown", event => {
   if (!$("#topMenu").contains(event.target) && !$("#menuButton").contains(event.target)) setMenu(false);
+  if (!$("#viewControls").contains(event.target) && !$("#viewButton").contains(event.target)) setViewMenu(false);
 });
 $("#soundButton").addEventListener("click", event => {
   soundEnabled = !soundEnabled;
@@ -529,17 +527,15 @@ $("#shareButton").addEventListener("click", async () => {
 });
 $("#helpCloseButton").addEventListener("click", () => $("#helpDialog").close());
 $("#helpDoneButton").addEventListener("click", () => $("#helpDialog").close());
-$("#resetButton").addEventListener("click", () => { selectedId = null; isolated = false; hiddenIds.clear(); currentView = "front"; updateViewButtons(); applyVisibility(); updateCard(); updateSelectionUi(); goHome(); closeCard(); });
+$("#resetButton").addEventListener("click", resetViewer);
 $("#fullscreenButton").addEventListener("click", () => document.fullscreenElement ? document.exitFullscreen() : app.requestFullscreen?.());
 $("#rotateButton").addEventListener("click", event => { controls.autoRotate = !controls.autoRotate; controls.autoRotateSpeed = 1.2; event.currentTarget.setAttribute("aria-pressed", String(controls.autoRotate)); renderNeeded = true; });
-$("#isolateButton").addEventListener("click", toggleIsolation);
+$("#viewButton").addEventListener("click", () => setViewMenu($("#viewControls").classList.contains("hidden")));
 $("#labelsButton").addEventListener("click", event => { labelsShown = !labelsShown; event.currentTarget.setAttribute("aria-pressed", String(labelsShown)); updateLabels(); });
 $("#showAllButton").addEventListener("click", showAll);
-$("#openCardButton").addEventListener("click", openCard);
 $("#closeCardButton").addEventListener("click", closeCard);
 $("#previousButton").addEventListener("click", () => { const index = bones.findIndex(item => item.id === selectedId); if (index >= 0) selectItem(bones[(index - 1 + bones.length) % bones.length].id); });
 $("#nextButton").addEventListener("click", () => { const index = bones.findIndex(item => item.id === selectedId); if (index >= 0) selectItem(bones[(index + 1) % bones.length].id); });
-$("#mobileListToggle").addEventListener("click", event => { const closed = app.classList.toggle("mobile-list-closed"); event.currentTarget.setAttribute("aria-expanded", String(!closed)); });
 $("#retryButton").addEventListener("click", loadModel);
 document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => setView(button.dataset.view)));
 document.addEventListener("keydown", event => {
@@ -547,19 +543,18 @@ document.addEventListener("keydown", event => {
   const key = event.key.toLowerCase();
   if (key === "r") $("#resetButton").click();
   if (["1", "2", "3", "4"].includes(key)) setView(["front", "back", "left", "right"][Number(key) - 1]);
-  if (key === "arrowright" && selectedId && byId.get(selectedId).category === "bones") $("#nextButton").click();
-  if (key === "arrowleft" && selectedId && byId.get(selectedId).category === "bones") $("#previousButton").click();
+  if (key === "arrowright") { event.preventDefault(); selectItem(bones[(bones.findIndex(item => item.id === selectedId) + 1) % bones.length].id); }
+  if (key === "arrowleft") { event.preventDefault(); const index = bones.findIndex(item => item.id === selectedId); selectItem(bones[(index <= 0 ? bones.length : index) - 1].id); }
+  if (key === "escape") { setViewMenu(false); setMenu(false); }
 });
 window.addEventListener("resize", () => { resize(); if (model) selectedId ? focusSelected(true) : goHome(true); });
-new ResizeObserver(() => { resize(); if (model) selectedId ? focusSelected(true) : goHome(true); }).observe(canvas);
+new ResizeObserver(resize).observe(canvas);
 controls.addEventListener("change", () => { renderNeeded = true; });
 app.addEventListener("click", playClick);
 
 renderCategories();
-renderStructureList();
-updateSelectionUi();
 updateViewButtons();
-$("#openCardButton").disabled = true;
+updateCard();
 closeCard();
 resize();
 loadModel();

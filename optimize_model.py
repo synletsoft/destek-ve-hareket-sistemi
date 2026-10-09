@@ -1,78 +1,79 @@
-"""Create a browser-friendly GLB; preserve resized PNG pixels with lossless WebP."""
+"""Build a GLB with a chosen texture size while preserving every geometry buffer.
 
+Desktop: python optimize_model.py --size 2048 --target destek-detail.glb
+Mobile:  python optimize_model.py --size 1024 --target destek-web.glb
+The original GLB or its lossless repack can be used as the input.
+"""
+import argparse
 from io import BytesIO
 import json
 from pathlib import Path
 import struct
-
 from PIL import Image
 
-
 HERE = Path(__file__).resolve().parent
-SOURCE = HERE / "kaynak" / "destek.glb"
-TARGET = HERE / "destek-web.glb"
-MAX_TEXTURE_SIZE = 1024
-EXTENSION = "EXT_texture_webp"
+original = HERE / 'kaynak' / 'destek.glb'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--source', type=Path, default=original if original.exists() else HERE / 'destek-lossless.glb')
+parser.add_argument('--target', type=Path, default=HERE / 'destek-detail.glb')
+parser.add_argument('--size', type=int, default=2048)
+args = parser.parse_args()
+if args.size < 128:
+    parser.error('--size must be at least 128')
+EXTENSION = 'EXT_texture_webp'
 
-
-def pad4(data: bytes, fill: bytes) -> bytes:
+def pad4(data, fill):
     return data + fill * ((-len(data)) % 4)
 
+with args.source.open('rb') as f:
+    magic, version, _ = struct.unpack('<4sII', f.read(12))
+    if magic != b'glTF' or version != 2:
+        raise ValueError('Expected a glTF 2.0 binary file')
+    length, kind = struct.unpack('<I4s', f.read(8))
+    if kind != b'JSON':
+        raise ValueError('Missing JSON chunk')
+    document = json.loads(f.read(length))
+    length, kind = struct.unpack('<I4s', f.read(8))
+    if kind != b'BIN\0':
+        raise ValueError('Missing binary chunk')
+    binary = f.read(length)
 
-with SOURCE.open("rb") as source:
-    magic, version, _ = struct.unpack("<4sII", source.read(12))
-    if magic != b"glTF" or version != 2:
-        raise ValueError("Expected a glTF 2.0 binary file")
-    json_length, json_type = struct.unpack("<I4s", source.read(8))
-    if json_type != b"JSON":
-        raise ValueError("GLB JSON chunk missing")
-    document = json.loads(source.read(json_length))
-    binary_length, binary_type = struct.unpack("<I4s", source.read(8))
-    if binary_type != b"BIN\x00":
-        raise ValueError("GLB binary chunk missing")
-    binary = source.read(binary_length)
-
-image_views = {image["bufferView"]: (index, image) for index, image in enumerate(document["images"])}
-converted_indices = set()
+image_views = {image['bufferView']: (i, image) for i, image in enumerate(document['images'])}
+converted = set()
 new_binary = bytearray()
-
-for index, view in enumerate(document["bufferViews"]):
-    start = view.get("byteOffset", 0)
-    data = binary[start : start + view["byteLength"]]
+for index, view in enumerate(document['bufferViews']):
+    start = view.get('byteOffset', 0)
+    data = binary[start:start + view['byteLength']]
     if index in image_views:
-        image_index, source_image = image_views[index]
+        image_index, metadata = image_views[index]
         image = Image.open(BytesIO(data))
-        image.thumbnail((MAX_TEXTURE_SIZE, MAX_TEXTURE_SIZE), Image.Resampling.LANCZOS)
+        image.thumbnail((args.size, args.size), Image.Resampling.LANCZOS)
         output = BytesIO()
-        if source_image["mimeType"] == "image/jpeg":
-            image.convert("RGB").save(output, "JPEG", quality=86, optimize=True)
-        else:
-            image.save(output, "WEBP", lossless=True, method=4, exact=True)
-            source_image["mimeType"] = "image/webp"
-            converted_indices.add(image_index)
+        # Lossless packing of the resized pixels; all mesh data stays untouched.
+        image.save(output, 'WEBP', lossless=True, method=4, exact=True)
+        metadata['mimeType'] = 'image/webp'
+        converted.add(image_index)
         data = output.getvalue()
-    new_binary.extend(b"\0" * ((-len(new_binary)) % 4))
-    view["byteOffset"] = len(new_binary)
-    view["byteLength"] = len(data)
+    new_binary.extend(b'\0' * ((-len(new_binary)) % 4))
+    view['byteOffset'] = len(new_binary)
+    view['byteLength'] = len(data)
     new_binary.extend(data)
 
-for texture in document["textures"]:
-    if texture.get("source") in converted_indices:
-        source_index = texture.pop("source")
-        texture.setdefault("extensions", {})[EXTENSION] = {"source": source_index}
-
-document.setdefault("extensionsUsed", []).append(EXTENSION)
-document.setdefault("extensionsRequired", []).append(EXTENSION)
-document["buffers"][0]["byteLength"] = len(new_binary)
-json_bytes = pad4(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode(), b" ")
-bin_bytes = pad4(bytes(new_binary), b"\0")
-total_length = 12 + 8 + len(json_bytes) + 8 + len(bin_bytes)
-
-with TARGET.open("wb") as target:
-    target.write(struct.pack("<4sII", b"glTF", 2, total_length))
-    target.write(struct.pack("<I4s", len(json_bytes), b"JSON"))
-    target.write(json_bytes)
-    target.write(struct.pack("<I4s", len(bin_bytes), b"BIN\x00"))
-    target.write(bin_bytes)
-
-print(f"Created {TARGET.name}: {TARGET.stat().st_size / 1024 / 1024:.1f} MiB")
+for texture in document['textures']:
+    source_index = texture.get('source', texture.get('extensions', {}).get(EXTENSION, {}).get('source'))
+    if source_index in converted:
+        texture.pop('source', None)
+        texture.setdefault('extensions', {})[EXTENSION] = {'source': source_index}
+for key in ['extensionsUsed', 'extensionsRequired']:
+    if EXTENSION not in document.setdefault(key, []):
+        document[key].append(EXTENSION)
+document['buffers'][0]['byteLength'] = len(new_binary)
+json_bytes = pad4(json.dumps(document, ensure_ascii=False, separators=(',', ':')).encode(), b' ')
+bin_bytes = pad4(bytes(new_binary), b'\0')
+with args.target.open('wb') as f:
+    f.write(struct.pack('<4sII', b'glTF', 2, 28 + len(json_bytes) + len(bin_bytes)))
+    f.write(struct.pack('<I4s', len(json_bytes), b'JSON'))
+    f.write(json_bytes)
+    f.write(struct.pack('<I4s', len(bin_bytes), b'BIN\0'))
+    f.write(bin_bytes)
+print(f'Created {args.target}: {args.target.stat().st_size / 1024 / 1024:.1f} MiB; textures ≤ {args.size}px')
